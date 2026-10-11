@@ -1,0 +1,894 @@
+@model Dashboard.Api.Controllers.DashboardPage
+@{
+    Layout = null;
+    string DateValue(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? "";
+    string AmountValue(decimal? value) => value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+    string Money(decimal value) => value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+    var today = DateOnly.FromDateTime(DateTime.Today);
+    var dateValue = DateValue(Model.NewTransaction.Date) is { Length: > 0 } posted ? posted : today.ToString("yyyy-MM-dd");
+    var category = string.IsNullOrWhiteSpace(Model.NewTransaction.Category) ? "General" : Model.NewTransaction.Category;
+    var forecast = Model.Forecast;
+    var budget = Model.Budget;
+    string Query(int page)
+    {
+        var filter = Model.Filter;
+        return "/transactions?fromDate=" + DateValue(filter.FromDate)
+            + "&toDate=" + DateValue(filter.ToDate)
+            + "&minAmount=" + AmountValue(filter.MinAmount)
+            + "&maxAmount=" + AmountValue(filter.MaxAmount)
+            + "&category=" + Uri.EscapeDataString(filter.Category ?? "")
+            + "&descriptionContains=" + Uri.EscapeDataString(filter.DescriptionContains ?? "")
+            + "&page=" + page
+            + "&size=" + Model.PageSize
+            + "&sort=" + Model.Sort
+            + "&dir=" + Model.Dir;
+    }
+    var export = "/transactions/export?fromDate=" + DateValue(Model.Filter.FromDate)
+        + "&toDate=" + DateValue(Model.Filter.ToDate)
+        + "&minAmount=" + AmountValue(Model.Filter.MinAmount)
+        + "&maxAmount=" + AmountValue(Model.Filter.MaxAmount)
+        + "&category=" + Uri.EscapeDataString(Model.Filter.Category ?? "")
+        + "&descriptionContains=" + Uri.EscapeDataString(Model.Filter.DescriptionContains ?? "");
+    // Band from real salary leftover — not pace extrapolation (one heavy day shouldn't scare the face).
+    var salaryLeftPreview = forecast.MonthlyIncome > 0
+        ? forecast.MonthlyIncome - forecast.Spent
+        : (forecast.HasLimit ? forecast.MonthlyLimit - forecast.Spent : (decimal?)null);
+    var faceBand = salaryLeftPreview is null
+        ? "forecast-ok"
+        : salaryLeftPreview < 0
+            ? "forecast-over"
+            : salaryLeftPreview < (forecast.MonthlyIncome > 0 ? forecast.MonthlyIncome : forecast.MonthlyLimit) * 0.2m
+                ? "forecast-warn"
+                : "forecast-ok";
+    var categoriesJson = System.Text.Json.JsonSerializer.Serialize(
+        forecast.Categories.Select(c => new { category = c.Category, amount = c.Amount }));
+    var capsJson = System.Text.Json.JsonSerializer.Serialize(
+        budget.CategoryCaps.Select(c => new { category = c.Category, percent = c.Percent, cap = c.Cap, spent = c.Spent, band = c.Band.ToString() }));
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/dashboard.css?v=gk12">
+</head>
+@{
+    var openPanel = !string.IsNullOrWhiteSpace(Model.OpenPanel)
+        ? Model.OpenPanel
+        : Model.LastOpResult is not null
+            ? "op"
+            : Model.ImportPreview is not null || !string.IsNullOrWhiteSpace(Model.FlashBad)
+                ? "advanced"
+                : "";
+}
+<body class="app-body" data-open-panel="@openPanel">
+<canvas id="particles"></canvas>
+<div class="drops" aria-hidden="true"><span></span><span></span><span></span></div>
+
+<div class="drawer-shell" id="drawerShell">
+<nav class="side-rail" id="sideRail" aria-label="Panels">
+    <button class="rail-btn" type="button" data-panel="analysis" aria-expanded="false" aria-controls="drawer">Analysis</button>
+    <button class="rail-btn" type="button" data-panel="goals" aria-expanded="false" aria-controls="drawer">Goals</button>
+    <button class="rail-btn" type="button" data-panel="op" aria-expanded="false" aria-controls="drawer">OP</button>
+    <button class="rail-btn" type="button" data-panel="advanced" aria-expanded="false" aria-controls="drawer">Advanced</button>
+</nav>
+
+<aside class="drawer" id="drawer">
+    <div class="drawer-head">
+        <h2 id="drawerTitle">Analysis</h2>
+        <button class="glass-btn" type="button" data-close>Close</button>
+    </div>
+
+    <div data-drawer-panel="analysis" hidden>
+        @{
+            var statusLabel = !budget.Enabled
+                ? "No paycheck"
+                : budget.Band switch
+                {
+                    Dashboard.Api.Budget.BudgetBand.Over => "Over spend budget",
+                    Dashboard.Api.Budget.BudgetBand.Warn => "Tight month",
+                    _ => "On track"
+                };
+        }
+        <section>
+            <h3>Status</h3>
+            <div class="stats">
+                <article class="stat-card">
+                    <div class="stat-title">Month</div>
+                    <div class="stat-value">@statusLabel</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-title">Spent / spend</div>
+                    <div class="stat-value">@(budget.Enabled ? $"{Money(budget.Spent)} / {Money(budget.MonthlyLimit)}" : "—")</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-title">Year goal</div>
+                    <div class="stat-value">@(Model.YearGoal > 0 ? $"€{Money(Model.Roadmap.Accumulated)} / €{Money(Model.YearGoal)}" : "—")</div>
+                </article>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(Model.YearGoalName) && Model.YearGoal > 0)
+            {
+                <p class="puzzle-hint">Working on <strong>@Model.YearGoalName</strong> · @Model.Roadmap.Percent.ToString("0.#")%</p>
+            }
+        </section>
+        <section>
+            <h3>Paycheck</h3>
+            <p class="puzzle-hint">Once a month: full salary + keep. Spend budget = salary − keep.</p>
+            <form action="/budget" method="post" class="drawer-form">
+                @Html.AntiForgeryToken()
+                <label>Full salary this month (EUR)
+                    <input type="number" step="0.01" min="0" name="monthlyIncome" value="@Money(Model.MonthlyIncome)" placeholder="e.g. 1000">
+                </label>
+                <label>Keep from salary (EUR / month)
+                    <input type="number" step="0.01" min="0" name="savingsTarget" value="@Money(Model.SavingsTarget)" placeholder="e.g. 200">
+                </label>
+                <p class="puzzle-hint">Spend budget: <strong>€@Money(Math.Max(0, Model.MonthlyIncome - Model.SavingsTarget))</strong></p>
+                <button class="glass-btn" type="submit">Save paycheck</button>
+            </form>
+            @if (budget.Enabled)
+            {
+                var barWidth = Math.Min(100, budget.Percent);
+                var budgetClass = budget.Band switch
+                {
+                    Dashboard.Api.Budget.BudgetBand.Over => "budget-over",
+                    Dashboard.Api.Budget.BudgetBand.Warn => "budget-warn",
+                    _ => "budget-ok"
+                };
+                <div class="budget-panel @budgetClass" style="margin-top:10px">
+                    <div class="budget-meta">
+                        <span>Spent @Money(budget.Spent) / spend @Money(budget.MonthlyLimit)</span>
+                        <span>@budget.Percent.ToString("0")%</span>
+                    </div>
+                    <div class="bar-track budget-track"><div class="bar-fill" style="width:@barWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)%"></div></div>
+                </div>
+            }
+        </section>
+        <section>
+            <h3>Roadmap</h3>
+            <p class="puzzle-hint">Month squares → <strong>Year goal</strong> (set in Goals). Progress, not scare math.</p>
+            <button class="glass-btn" type="button" data-open-roadmap>Open roadmap</button>
+        </section>
+        <section>
+            <h3>Categories (this month)</h3>
+            <div id="categoryChart"></div>
+        </section>
+        <section>
+            <h3>Pace detail <span class="puzzle-hint">(optional)</span></h3>
+            <p class="puzzle-hint">Avg/day = spent ÷ day-of-month — skewed by one heavy day.</p>
+            <div class="stats">
+                <article class="stat-card">
+                    <div class="stat-title">Avg / day</div>
+                    <div class="stat-value">@Money(forecast.AvgPerDay)</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-title">Year pocket (left×12)</div>
+                    <div class="stat-value">@(forecast.MonthlyIncome > 0 ? Money((forecast.MonthlyIncome - forecast.Spent) * 12m) : "—")</div>
+                </article>
+            </div>
+        </section>
+    </div>
+
+    <div data-drawer-panel="roadmap" hidden>
+        @{
+            var map = Model.Roadmap;
+            var barPct = Math.Clamp(map.Percent, 0, 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+            var roadTitle = string.IsNullOrWhiteSpace(Model.YearGoalName) ? "Year roadmap" : Model.YearGoalName;
+        }
+        <section>
+            <div class="actions" style="margin-bottom:8px">
+                <button class="glass-btn" type="button" data-roadmap-back>← Back</button>
+            </div>
+            <h3>@roadTitle</h3>
+            <p class="puzzle-hint">@map.Hint</p>
+            @if (map.Goal > 0)
+            {
+                <div class="stats" style="margin-bottom:12px">
+                    <article class="stat-card">
+                        <div class="stat-title">This month</div>
+                        <div class="stat-value tone-ok">+€@Money(map.ThisMonthSaved)</div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-title">Banked so far</div>
+                        <div class="stat-value">€@Money(map.Accumulated)</div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-title">Still need</div>
+                        <div class="stat-value">€@Money(map.Remaining)</div>
+                    </article>
+                </div>
+                <div class="roadmap-progress">
+                    <div class="roadmap-progress-meta">
+                        <span>€@Money(map.Accumulated) / €@Money(map.Goal)</span>
+                        <span>@map.Percent.ToString("0.#")%</span>
+                    </div>
+                    <div class="bar-track roadmap-track">
+                        <div class="bar-fill roadmap-fill" style="width:@barPct%"></div>
+                    </div>
+                    <p class="puzzle-hint">Solid squares = real leftover (salary − spent). Dashed = forecast only — not counted in the total yet.</p>
+                </div>
+                <div class="roadmap-grid" role="list">
+                    @foreach (var cell in map.Squares)
+                    {
+                        var cls = cell.IsForecast
+                            ? "roadmap-cell is-forecast"
+                            : cell.IsCurrent
+                                ? "roadmap-cell is-done is-current"
+                                : (cell.CountsTowardGoal ? "roadmap-cell is-done" : "roadmap-cell is-empty");
+                        <div class="@cls" role="listitem" title="@(cell.IsForecast ? "Forecast (not banked)" : cell.IsCurrent ? "This month" : "Actual")">
+                            <span class="roadmap-cell-label">@cell.Label@(cell.IsCurrent ? " · now" : "")</span>
+                            <span class="roadmap-cell-value">@(cell.IsForecast ? $"need €{Money(Math.Max(0, cell.Saved))}" : $"€{Money(cell.Saved)}")</span>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <p class="puzzle-hint">Set Year goal in <strong>Goals</strong> first.</p>
+            }
+        </section>
+    </div>
+
+    <div data-drawer-panel="goals" hidden>
+        <section>
+            <h3>Year goal</h3>
+            <p class="puzzle-hint">Big pile for the year — name, amount, by when. Roadmap marches toward this.</p>
+            <form action="/budget/year-goal" method="post" class="drawer-form">
+                @Html.AntiForgeryToken()
+                <label>Name
+                    <input name="yearGoalName" maxlength="120" value="@Model.YearGoalName" placeholder="Trip, emergency, laptop…">
+                </label>
+                <label>Amount (EUR)
+                    <input type="number" step="0.01" min="0" name="yearGoal" value="@Money(Model.YearGoal)" placeholder="e.g. 2400">
+                </label>
+                <label>By date (optional)
+                    <input type="date" name="savingsDeadline" value="@(Model.SavingsDeadline?.ToString("yyyy-MM-dd") ?? "")">
+                </label>
+                <p class="puzzle-hint">
+                    @{
+                        var todayHint = DateOnly.FromDateTime(DateTime.Today);
+                        if (Model.SavingsDeadline is DateOnly finish && finish >= todayHint)
+                        {
+                            var squares = Dashboard.Api.Budget.RoadmapMath.MonthsInclusive(todayHint, finish);
+                            var forecast = Dashboard.Api.Budget.RoadmapMath.ForecastSquaresUntil(todayHint, finish);
+                            var need = Model.YearGoal > 0
+                                ? Dashboard.Api.Budget.RoadmapMath.RequiredPace(
+                                    Math.Max(0, Model.YearGoal - Model.Roadmap.Accumulated), forecast)
+                                : 0m;
+                            <text>Finish <strong>@finish.ToString("yyyy-MM")</strong> → <strong>@squares</strong> month squares
+                                (now + @forecast dashed) · need ≈ €@Money(need)/mo on remaining months.</text>
+                        }
+                        else if (Model.YearGoal > 0 && Model.Roadmap.PacePerMonth > 0)
+                        {
+                            <text>No finish date — Roadmap uses leftover pace (~€@Money(Model.Roadmap.PacePerMonth)/mo).</text>
+                        }
+                        else
+                        {
+                            <text>Set amount + finish date — one square per month until that date.</text>
+                        }
+                    }
+                </p>
+                <button class="glass-btn" type="submit">Save year goal</button>
+            </form>
+            @if (Model.YearGoal > 0)
+            {
+                var gBar = Math.Min(100, Model.Roadmap.Percent).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+                <div class="roadmap-progress" style="margin-top:12px">
+                    <div class="roadmap-progress-meta">
+                        <span>@(string.IsNullOrWhiteSpace(Model.YearGoalName) ? "Progress" : Model.YearGoalName): €@Money(Model.Roadmap.Accumulated) / €@Money(Model.YearGoal)</span>
+                        <span>@Model.Roadmap.Percent.ToString("0.#")%</span>
+                    </div>
+                    <div class="bar-track roadmap-track">
+                        <div class="bar-fill roadmap-fill" style="width:@gBar%"></div>
+                    </div>
+                </div>
+            }
+        </section>
+        <section>
+            <h3>Category caps</h3>
+            <p class="puzzle-hint">Ceilings inside the spend budget. Paycheck is in <strong>Analysis</strong>.</p>
+            @{
+                var capped = new HashSet<string>(budget.CategoryCaps.Select(c => c.Category), StringComparer.OrdinalIgnoreCase);
+                var suggest = forecast.Categories.Select(c => c.Category)
+                    .Concat(new[] { "Food", "Travel", "General", "Health", "Fun", "Rent" })
+                    .Where(name => !string.IsNullOrWhiteSpace(name) && !capped.Contains(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(8)
+                    .ToList();
+            }
+            <div class="cap-chip-row" id="capChipRow">
+                @foreach (var cap in budget.CategoryCaps)
+                {
+                    var chipClass = cap.Band switch
+                    {
+                        Dashboard.Api.Budget.BudgetBand.Over => "cap-over",
+                        Dashboard.Api.Budget.BudgetBand.Warn => "cap-warn",
+                        _ => "cap-ok"
+                    };
+                    <div class="cap-chip @chipClass" title="@Money(cap.Spent) / @Money(cap.Cap)">
+                        <span class="cap-hex" style="--cap-fill:@Math.Min(100, cap.Percent).ToString(System.Globalization.CultureInfo.InvariantCulture)%"></span>
+                        <span>@cap.Category</span>
+                        <span class="cap-pct">@cap.Percent.ToString("0")%</span>
+                        <form action="/budget/category/@cap.Id/delete" method="post">
+                            @Html.AntiForgeryToken()
+                            <button class="cap-x" type="submit" title="Remove">×</button>
+                        </form>
+                    </div>
+                }
+                <button class="cap-chip cap-add" type="button" id="capAddPlus" title="Add another category cap">+</button>
+            </div>
+            @if (suggest.Count > 0)
+            {
+                <div class="cap-suggest-row">
+                    <span class="puzzle-hint">Quick add:</span>
+                    @foreach (var name in suggest)
+                    {
+                        <button class="cap-suggest" type="button" data-cap-category="@name">+ @name</button>
+                    }
+                </div>
+            }
+            <form action="/budget/category" method="post" class="drawer-form cap-add-form" id="capAddForm">
+                @Html.AntiForgeryToken()
+                <label>Category
+                    <input id="capCategoryInput" name="category" maxlength="100" placeholder="Food, Travel, Rent…" list="capCategoryIdeas" required>
+                </label>
+                <datalist id="capCategoryIdeas">
+                    @foreach (var name in suggest.Concat(budget.CategoryCaps.Select(c => c.Category)).Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        <option value="@name"></option>
+                    }
+                </datalist>
+                <label>Cap (EUR / month)
+                    <input id="capAmountInput" type="number" step="0.01" min="0.01" name="monthlyCap" placeholder="100" required>
+                </label>
+                <button class="glass-btn" type="submit">Add cap</button>
+            </form>
+        </section>
+    </div>
+
+    <div data-drawer-panel="op" hidden>
+        <section>
+            <h3>OPL-style workflow</h3>
+            <p class="puzzle-hint">Same modeling loop as CPLEX OPL homework: <strong>Problem → Data → Constraints → Solve</strong>. In-app templates run instantly; export opens the formal LP in IBM OPL Studio.</p>
+            <ol class="opl-steps puzzle-hint">
+                <li><strong>Problem</strong> — pick what to optimize (template below).</li>
+                <li><strong>Data</strong> — live month categories + Goals (limit, caps, savings).</li>
+                <li><strong>Constraints</strong> — tune floors, shocks, horizon (like .dat knobs).</li>
+                <li><strong>Solve</strong> — decisions + metrics; optional Apply as caps / A·B.</li>
+            </ol>
+        </section>
+        <section>
+            <h3>1 · Problem</h3>
+            <form action="/op/solve" method="post" class="drawer-form" id="opSolveForm">
+                @Html.AntiForgeryToken()
+                <label>Model template
+                    <select name="template" id="opTemplate">
+                        <option value="hit-limit">Hit month limit — allocate remaining (LP-shaped)</option>
+                        <option value="cut-green">Cut to green — proportional trim</option>
+                        <option value="pace-year">Pace vs year — daily / weekly ceiling</option>
+                        <option value="burn-rate">Burn rate — runway days</option>
+                        <option value="cap-stress">Cap stress — utilization heat</option>
+                        <option value="savings-path">Savings path — months to goal</option>
+                        <option value="what-if">What-if shock — ±% on a category</option>
+                        <option value="rebalance">Rebalance — equal envelope mix</option>
+                        <option value="horizon">Horizon — N-day spend plan</option>
+                    </select>
+                </label>
+                <h3>2 · Data (live)</h3>
+                @if (!forecast.HasLimit)
+                {
+                    <p class="note bad">Monthly budget is OFF. Go to Goals → set “I can spend this month” (e.g. 500), then come back. The “Year leftover target” field below is NOT that budget.</p>
+                }
+                <p class="puzzle-hint">Spent €@Money(forecast.Spent) · spend @(forecast.HasLimit ? "€" + Money(forecast.MonthlyLimit) : "OFF") · leftover @(forecast.ProjectedLeftover is decimal pl ? "€" + Money(pl) : "—") · caps @budget.CategoryCaps.Count</p>
+                <p class="puzzle-hint">@Model.OplExportTitle</p>
+                <p>
+                    <a class="link" href="/op/export.mod">Download goal-keeper.mod</a>
+                    ·
+                    <a class="link" href="/op/export.dat">Download goal-keeper.dat</a>
+                </p>
+                <p class="puzzle-hint">Optional homework bridge: open .mod+.dat in CPLEX. App solves templates itself — no CPLEX install needed for Solve.</p>
+                <h3>3 · Constraints <span class="puzzle-hint">(only fields for this template)</span></h3>
+                <div class="op-field" data-op-for="pace-year">
+                    <label>Year leftover target (EUR) — for Pace vs year
+                        <input type="number" step="0.01" min="0" name="yearLeftoverTarget" value="@Money(Model.SavingsTarget)">
+                    </label>
+                </div>
+                <div class="op-field" data-op-for="cut-green">
+                    <label>Extra cut % buffer — for Cut to green
+                        <input type="number" step="1" min="0" max="100" name="extraCutPercent" value="0">
+                    </label>
+                </div>
+                <div class="op-field" data-op-for="what-if">
+                    <label>What-if category
+                        <input name="whatIfCategory" maxlength="100" placeholder="Food">
+                    </label>
+                    <label>What-if change % (− cut / + spike)
+                        <input type="number" step="1" min="-90" max="200" name="whatIfChangePercent" value="-20">
+                    </label>
+                </div>
+                <div class="op-field" data-op-for="hit-limit rebalance">
+                    <label>Floor % / category — for Hit limit &amp; Rebalance
+                        <input type="number" step="1" min="0" max="50" name="mustKeepFloorPercent" value="10">
+                    </label>
+                </div>
+                <div class="op-field" data-op-for="horizon">
+                    <label>Horizon days — for Horizon plan
+                        <input type="number" step="1" min="1" max="31" name="horizonDays" value="14">
+                    </label>
+                </div>
+                <p class="puzzle-hint op-field" data-op-for="burn-rate cap-stress savings-path">No extra knobs — uses Goals + live spend only.</p>
+                <h3>4 · Solve</h3>
+                <button class="glass-btn" type="submit">Solve model</button>
+            </form>
+        </section>
+        @if (Model.LastOpResult is { } op)
+        {
+            <section>
+                <h3>Solution · @op.Title</h3>
+                <p>@op.Summary</p>
+                <p class="puzzle-hint">Objective: @op.Objective.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) @op.ObjectiveLabel · @(op.Feasible ? "feasible" : "infeasible")</p>
+                @if (op.Metrics is { Count: > 0 })
+                {
+                    <div class="stats" style="margin:12px 0">
+                        @foreach (var m in op.Metrics)
+                        {
+                            <article class="stat-card">
+                                <div class="stat-title">@m.Label</div>
+                                <div class="stat-value" style="font-size:18px">@m.Value</div>
+                            </article>
+                        }
+                    </div>
+                }
+                @if (op.Decisions.Count == 0)
+                {
+                    <p class="puzzle-hint">No category rows yet — add spend on the face form.</p>
+                }
+                else
+                {
+                    <table>
+                        <thead><tr><th>Category</th><th>Now</th><th>Out</th><th>Δ</th><th>Advice</th></tr></thead>
+                        <tbody>
+                        @foreach (var d in op.Decisions)
+                        {
+                            <tr>
+                                <td>@d.Category@(d.UtilizationPercent is double u ? $" ({u:0}%)" : "")</td>
+                                <td>@Money(d.CurrentSpend)</td>
+                                <td>@Money(d.Suggested)</td>
+                                <td>@(d.Delta is decimal delta ? Money(delta) : "—")</td>
+                                <td>@d.Advice</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+                @{
+                    var opJson = System.Text.Json.JsonSerializer.Serialize(op);
+                }
+                <form action="/op/save" method="post" class="drawer-form" style="margin-top:12px">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="resultJson" value="@opJson">
+                    <label>Save slot
+                        <select name="slot"><option>A</option><option>B</option></select>
+                    </label>
+                    <button class="glass-btn" type="submit">Save scenario</button>
+                </form>
+                <form action="/op/apply" method="post" class="drawer-form">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="resultJson" value="@opJson">
+                    <button class="glass-btn" type="submit" onclick="return confirm('Write suggested amounts as category caps in Goals?');">Apply as caps</button>
+                </form>
+            </section>
+        }
+        <section>
+            <h3>Scenarios A / B</h3>
+            @if (Model.OpScenarios.Count == 0)
+            {
+                <p class="puzzle-hint">Save two solves to compare.</p>
+            }
+            else
+            {
+                <div class="stats">
+                    @foreach (var scenario in Model.OpScenarios)
+                    {
+                        <article class="stat-card">
+                            <div class="stat-title">Slot @scenario.Slot · @scenario.Template</div>
+                            <div class="stat-value" style="font-size:16px">@scenario.Title</div>
+                            <p class="puzzle-hint">@scenario.SavedAt.ToLocalTime().ToString("g")</p>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+
+    <div data-drawer-panel="advanced" hidden>
+        @if (!string.IsNullOrWhiteSpace(Model.Flash))
+        {
+            <p class="note ok">@Model.Flash</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(Model.FlashBad))
+        {
+            <p class="note bad">@Model.FlashBad</p>
+        }
+        <section>
+            <h3>System</h3>
+            <p class="puzzle-hint">Status for demos / interviews — not settings you click every day.</p>
+            @if (Model.AppStatus is { } st)
+            {
+                <ul class="puzzle-hint">
+                    <li><strong>Account id</strong>: @Model.AccountId — use this for Telegram:BoundAccountId in user-secrets.</li>
+                    <li><strong>Database</strong>: @(st.DatabaseOk ? "connected" : "down")</li>
+                    <li><strong>Telegram</strong>: @(st.TelegramReady ? "ready" : "off") · token @(st.TelegramTokenSet ? "set" : "empty") · chat @(st.TelegramChatBound ? "bound" : "no") · account @(st.TelegramAccountBound ? "bound" : "no")</li>
+                    <li><strong>Encryption</strong>: What/Why are encrypted in SQLite.
+                        @(st.EncryptionKeyHardened
+                            ? "Key is set (not the old default) — OK for local demo."
+                            : "Using weak/default key — set Encryption:Key via user-secrets before showing anyone.")</li>
+                    <li><strong>DB file</strong>: @st.ConnectionString</li>
+                </ul>
+            }
+            <form action="/demo/reset" method="post" class="drawer-form">
+                @Html.AntiForgeryToken()
+                <button class="glass-btn" type="submit" onclick="return confirm('Reset THIS account demo data?');">Reset demo data</button>
+            </form>
+        </section>
+        <section>
+            <h3>Excel import</h3>
+            <p class="puzzle-hint">.xlsx only · max 2 MB · ≤2000 rows · preview before commit · formula-safe text.</p>
+            <p><a class="link" href="/import/template.xlsx">Download template.xlsx</a></p>
+            <form action="/import/excel" method="post" enctype="multipart/form-data" class="drawer-form">
+                @Html.AntiForgeryToken()
+                <label>Workbook
+                    <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                </label>
+                <button class="glass-btn" type="submit">Preview</button>
+            </form>
+            @if (Model.ImportPreview is { } preview)
+            {
+                <p class="puzzle-hint">@preview.FileName · @preview.Accepted.Count accepted · @preview.Rejected.Count rejected</p>
+                @if (preview.Rejected.Count > 0)
+                {
+                    <ul class="puzzle-hint">
+                        @foreach (var row in preview.Rejected.Take(8))
+                        {
+                            <li>Row @row.SheetRow: @row.Error</li>
+                        }
+                    </ul>
+                }
+                @if (preview.Accepted.Count > 0 && preview.PreviewToken is not null)
+                {
+                    <form action="/import/excel/commit" method="post" class="drawer-form">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="previewToken" value="@preview.PreviewToken">
+                        <button class="glass-btn" type="submit">Commit @preview.Accepted.Count rows</button>
+                    </form>
+                }
+            }
+            @if (Model.ImportBatches.Count > 0)
+            {
+                <h3>Import audit</h3>
+                <ul class="puzzle-hint">
+                    @foreach (var batch in Model.ImportBatches)
+                    {
+                        <li>#@batch.Id · @batch.FileName · @batch.AcceptedRows rows · @batch.CreatedAt.ToLocalTime().ToString("g")</li>
+                    }
+                </ul>
+            }
+        </section>
+        <section>
+            <h3>Inbox @(Model.Inbox.Count > 0 ? $"({Model.Inbox.Count})" : "")</h3>
+            @if (Model.InboxNeedsFields)
+            {
+                <p class="note bad">Fill amount and what, then Accept again.</p>
+            }
+            @if (Model.Inbox.Count == 0)
+            {
+                <p class="puzzle-hint">Unclear Telegram lines land here.</p>
+            }
+            else
+            {
+                @foreach (var entry in Model.Inbox)
+                {
+                    <form action="/inbox/@entry.Id/accept" method="post" class="drawer-form inbox-card">
+                        @Html.AntiForgeryToken()
+                        <p class="puzzle-hint">Raw: @entry.RawText</p>
+                        <label>Amount
+                            <input type="number" step="0.01" min="0.01" name="amount" required value="@(entry.Amount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")">
+                        </label>
+                        <label>Category
+                            <input name="category" maxlength="100" value="@(entry.Category ?? "General")" required>
+                        </label>
+                        <label>What
+                            <input name="description" required maxlength="1000" value="@(entry.Description ?? entry.RawText)">
+                        </label>
+                        <label>Why
+                            <input name="why" maxlength="300" value="@(entry.Why ?? "")" placeholder="optional">
+                        </label>
+                        <div class="actions">
+                            <button class="glass-btn" type="submit">Accept</button>
+                            <button class="danger-btn" type="submit" form="discard-@entry.Id">Discard</button>
+                        </div>
+                    </form>
+                    <form id="discard-@entry.Id" action="/inbox/@entry.Id/discard" method="post">
+                        @Html.AntiForgeryToken()
+                    </form>
+                }
+            }
+        </section>
+        <section>
+            <h3>Edit</h3>
+            <table>
+                <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Amount</th>
+                    <th>Category</th>
+                    <th>What</th>
+                    <th>Why</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                @if (Model.Transactions.Count == 0)
+                {
+                    <tr><td colspan="6">Nothing here yet.</td></tr>
+                }
+                @foreach (var transaction in Model.Transactions)
+                {
+                    <tr data-category="@transaction.Category" data-amount="@transaction.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture)">
+                        <td>@transaction.Date.ToString("dd.MM")</td>
+                        <td>@Money(transaction.Amount)</td>
+                        <td>@transaction.Category</td>
+                        <td>@transaction.Description</td>
+                        <td>@transaction.Why</td>
+                        <td>
+                            <div class="actions">
+                                <a class="link" href="/transactions/@transaction.Id/edit">Edit</a>
+                                <form action="/transactions/@transaction.Id/delete" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button class="danger-btn" type="submit" onclick="return confirm('Delete this entry?');">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+            <div class="pager">
+                @if (Model.CurrentPage > 0)
+                {
+                    <a href="@Query(Model.CurrentPage - 1)">Prev</a>
+                }
+                <span>@(Model.TotalPages == 0 ? 0 : Model.CurrentPage + 1) / @Model.TotalPages</span>
+                @if (Model.CurrentPage + 1 < Model.TotalPages)
+                {
+                    <a href="@Query(Model.CurrentPage + 1)">Next</a>
+                }
+            </div>
+        </section>
+        <section>
+            <h3>Filter and file</h3>
+            <form action="/transactions" method="get" class="drawer-form">
+                <label>From
+                    <input type="date" name="fromDate" value="@DateValue(Model.Filter.FromDate)">
+                </label>
+                <label>To
+                    <input type="date" name="toDate" value="@DateValue(Model.Filter.ToDate)">
+                </label>
+                <label>Amount from
+                    <input type="number" step="0.01" name="minAmount" value="@AmountValue(Model.Filter.MinAmount)">
+                </label>
+                <label>Amount to
+                    <input type="number" step="0.01" name="maxAmount" value="@AmountValue(Model.Filter.MaxAmount)">
+                </label>
+                <label>Category
+                    <input type="text" name="category" value="@Model.Filter.Category">
+                </label>
+                <label>What or why
+                    <input type="text" name="descriptionContains" value="@Model.Filter.DescriptionContains">
+                </label>
+                <input type="hidden" name="size" value="@Model.PageSize">
+                <input type="hidden" name="sort" value="@Model.Sort">
+                <input type="hidden" name="dir" value="@Model.Dir">
+                <button class="glass-btn" type="submit">Show</button>
+                <a class="glass-btn button-link" href="@export">Download CSV</a>
+            </form>
+        </section>
+        <section class="more-fields">
+            <h3>Details</h3>
+            <label>Date
+                <input form="entry" type="date" name="Date" required value="@dateValue">
+            </label>
+            <p class="puzzle-hint">Leave date = today. Category is on the main form.</p>
+        </section>
+        <form class="logout" action="/logout" method="post">
+            @Html.AntiForgeryToken()
+            <button type="submit">Sign out (@User.Identity?.Name)</button>
+        </form>
+    </div>
+</aside>
+</div>
+
+<main class="stage">
+    <p class="brand-mark" aria-label="Goal Keeper">GOAL KEEPER</p>
+    <form id="entry" class="entry-form" action="/transactions" method="post">
+        @Html.AntiForgeryToken()
+        <div class="composer">
+            @{
+                var income = forecast.MonthlyIncome > 0
+                    ? forecast.MonthlyIncome
+                    : (forecast.HasLimit ? forecast.MonthlyLimit + forecast.SavingsTarget : 0m);
+                var leftFromSalary = income > 0 ? income - forecast.Spent : (decimal?)null;
+                // Toward year goal this month = full leftover (same as Roadmap credit).
+                var savedThisMonth = leftFromSalary is decimal lf && lf > 0 ? lf : (decimal?)null;
+                var yearGoal = Model.YearGoal;
+                var yearName = string.IsNullOrWhiteSpace(Model.YearGoalName) ? "Year goal" : Model.YearGoalName!;
+                var yearAcc = Model.Roadmap.Accumulated;
+                var yearPct = yearGoal > 0 ? Math.Min(100, Model.Roadmap.Percent) : 0;
+                var yearBar = yearPct.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            <div class="forecast-strip @faceBand">
+                <div class="forecast-main">
+                    <span class="forecast-label">Left from salary</span>
+                    @if (leftFromSalary is decimal pocket)
+                    {
+                        <span class="forecast-value @(pocket < 0 ? "tone-bad" : "tone-ok")">€@Money(pocket)</span>
+                        <span class="forecast-sub">salary €@Money(income) − spent €@Money(forecast.Spent)</span>
+                    }
+                    else
+                    {
+                        <span class="forecast-value">—</span>
+                        <span class="forecast-sub">Set paycheck in Analysis</span>
+                    }
+                    @if (savedThisMonth is decimal savedMo)
+                    {
+                        <span class="forecast-label" style="margin-top:10px">Saved toward year goal</span>
+                        <span class="forecast-year-value tone-ok">€@Money(savedMo)</span>
+                        <span class="forecast-sub">= left from salary this month (full leftover)</span>
+                    }
+                </div>
+                <div class="forecast-year">
+                    <span class="forecast-label">@yearName</span>
+                    @if (yearGoal > 0)
+                    {
+                        <span class="forecast-year-value tone-ok">€@Money(yearAcc) / €@Money(yearGoal)</span>
+                        <span class="forecast-sub">@yearPct.ToString("0.#")% · edit in Goals</span>
+                        <div class="bar-track roadmap-track" style="margin-top:8px">
+                            <div class="bar-fill roadmap-fill" style="width:@yearBar%"></div>
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="forecast-year-value">—</span>
+                        <span class="forecast-sub">Set Year goal in Goals</span>
+                    }
+                    <span class="forecast-label" style="margin-top:10px">Spent this month</span>
+                    <span class="forecast-year-value">€@Money(forecast.Spent)</span>
+                    @if (forecast.HasLimit)
+                    {
+                        <span class="forecast-sub">spend budget €@Money(forecast.MonthlyLimit)</span>
+                    }
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(Model.Flash))
+            {
+                <p class="note ok">@Model.Flash</p>
+            }
+            @if (!string.IsNullOrWhiteSpace(Model.FlashBad))
+            {
+                <p class="note bad">@Model.FlashBad</p>
+            }
+            @if (Model.JustAdded)
+            {
+                <p class="note ok">Saved.</p>
+            }
+            @if (!ViewData.ModelState.IsValid)
+            {
+                <p class="note bad">Check the amount.</p>
+            }
+            <label class="amount-field">Amount
+                <input name="Amount" type="number" step="0.01" min="0.01" inputmode="decimal" autofocus required value="@AmountValue(Model.NewTransaction.Amount)" placeholder="0.00">
+            </label>
+            <label>Category
+                <input name="Category" required maxlength="100" value="@category" placeholder="Food, Travel, General" autocomplete="off">
+            </label>
+            <label>What <span class="puzzle-hint">(optional)</span>
+                <input name="Description" maxlength="1000" value="@Model.NewTransaction.Description" placeholder="Coffee — or leave empty" autocomplete="off">
+            </label>
+            <label>Why <span class="puzzle-hint">(optional)</span>
+                <input name="Why" maxlength="300" value="@Model.NewTransaction.Why" placeholder="optional" autocomplete="off">
+            </label>
+            <button class="glass-btn" type="submit">Add</button>
+        </div>
+    </form>
+</main>
+<script src="/js/particles.js?v=gk9"></script>
+<script src="/js/drawer.js?v=gk11"></script>
+<script type="application/json" id="month-categories-data">@Html.Raw(categoriesJson)</script>
+<script type="application/json" id="category-caps-data">@Html.Raw(capsJson)</script>
+<script>
+    (function () {
+        const form = document.getElementById("capAddForm");
+        const categoryInput = document.getElementById("capCategoryInput");
+        const amountInput = document.getElementById("capAmountInput");
+        const focusAdd = (name) => {
+            if (!form || !categoryInput) return;
+            form.classList.add("is-spotlight");
+            if (name) categoryInput.value = name;
+            categoryInput.focus();
+            if (amountInput && !amountInput.value) amountInput.focus();
+            form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            setTimeout(() => form.classList.remove("is-spotlight"), 1600);
+        };
+        document.getElementById("capAddPlus")?.addEventListener("click", () => focusAdd(""));
+        document.querySelectorAll("[data-cap-category]").forEach((btn) => {
+            btn.addEventListener("click", () => focusAdd(btn.getAttribute("data-cap-category") || ""));
+        });
+    })();
+    (function () {
+        const select = document.getElementById("opTemplate");
+        if (!select) return;
+        const sync = () => {
+            const t = select.value;
+            document.querySelectorAll(".op-field").forEach((el) => {
+                const forList = (el.getAttribute("data-op-for") || "").split(/\s+/).filter(Boolean);
+                el.hidden = forList.length > 0 && !forList.includes(t);
+            });
+        };
+        select.addEventListener("change", sync);
+        sync();
+    })();
+</script>
+<script>
+    (function () {
+        const money = new Intl.NumberFormat("en-GB", { style: "currency", currency: "EUR" });
+        const chart = document.getElementById("categoryChart");
+        if (!chart) return;
+        let categories = [];
+        let caps = {};
+        try { categories = JSON.parse(document.getElementById("month-categories-data").textContent || "[]"); } catch (_) {}
+        try {
+            JSON.parse(document.getElementById("category-caps-data").textContent || "[]").forEach((cap) => {
+                caps[(cap.category || "").toLowerCase()] = cap;
+            });
+        } catch (_) {}
+        if (!categories.length) {
+            chart.textContent = "Nothing to chart yet.";
+            return;
+        }
+        const max = Math.max(0.01, ...categories.map((c) => Number(c.amount) || 0));
+        categories.forEach((item) => {
+            const amount = Number(item.amount) || 0;
+            const category = item.category || "General";
+            const row = document.createElement("div");
+            row.className = "bar-row bar-row-cap";
+            const label = document.createElement("div");
+            label.className = "bar-label";
+            const cap = caps[category.toLowerCase()];
+            if (cap) {
+                const hex = document.createElement("span");
+                hex.className = "cap-hex " + (cap.band === "Over" ? "cap-over" : cap.band === "Warn" ? "cap-warn" : "cap-ok");
+                hex.style.setProperty("--cap-fill", Math.min(100, Number(cap.percent) || 0) + "%");
+                hex.title = "Cap " + Number(cap.spent).toFixed(2) + " / " + Number(cap.cap).toFixed(2);
+                label.appendChild(hex);
+            }
+            const name = document.createElement("span");
+            name.textContent = category;
+            label.appendChild(name);
+            const track = document.createElement("div");
+            track.className = "bar-track";
+            const fill = document.createElement("div");
+            fill.className = "bar-fill";
+            fill.style.width = ((amount / max) * 100) + "%";
+            track.appendChild(fill);
+            const value = document.createElement("div");
+            value.textContent = money.format(amount);
+            row.append(label, track, value);
+            chart.appendChild(row);
+        });
+    })();
+</script>
+</body>
+</html>
