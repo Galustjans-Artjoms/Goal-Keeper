@@ -7,6 +7,16 @@ Neon cyber expense dashboard on ASP.NET Core — fast spend entry, Goals, Analys
 Portfolio evolution of [Dashboard](https://github.com/Galustjans-Artjoms/Dashboard) ·  
 repo: [Galustjans-Artjoms/Goal-Keeper](https://github.com/Galustjans-Artjoms/Goal-Keeper)
 
+## Why this exists
+
+**Personal money clarity** — see paycheck → spend budget → leftover and a year goal in one place, without a bloated bank app.
+
+**Capture spends where they happen** — type `4.50 coffee…` in Telegram; clear lines hit the ledger, messy ones land in Inbox instead of being lost.
+
+**Portfolio + study** — real ASP.NET Core / EF / security / Excel gate work you can show; **OP** templates mirror LP / OPL-style homework (solve in-app or export `.mod` / `.dat`).
+
+Built for one user (or a demo account), not as a multi-tenant SaaS.
+
 ![Goal Keeper — main screen](docs/images/goal-keeper-ui.jpg)
 
 <p align="center">
