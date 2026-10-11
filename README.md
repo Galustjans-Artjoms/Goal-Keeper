@@ -1,5 +1,7 @@
 # Goal Keeper
 
+> **Status: Alpha (&lt; 1.0)** — personal portfolio / homework sandbox. APIs, UI, and Telegram parsing can change; expect rough edges. Not a production finance product.
+
 Neon cyber expense dashboard on ASP.NET Core — fast spend entry, Goals, Analysis, OP templates, Excel import with a security gate, and an optional Telegram inbox.
 
 Portfolio evolution of [Dashboard](https://github.com/Galustjans-Artjoms/Dashboard) ·  
@@ -82,14 +84,29 @@ dotnet user-secrets set "Telegram:BoundAccountId" "0"
 
 Details: [TELEGRAM.md](TELEGRAM.md).
 
-## Telegram (short)
+## Telegram bot — what it accepts
 
-1. BotFather → token → `Telegram:BotToken`  
-2. Start the API → message the bot `/start` → set `AllowedChatId`  
-3. Set `BoundAccountId` from Advanced → System  
-4. Send lines like: `4.50 coffee late for train`  
+Full setup + examples: **[TELEGRAM.md](TELEGRAM.md)**.
 
-The bot only runs while `Dashboard.Api` is running.
+**Commands:** `/start` · `/help` · `/id` · `/today` · optional `/add …`
+
+**Expense line** (high confidence → today’s transaction; otherwise → **Advanced → Inbox**):
+
+| Part | Rule | Example |
+|------|------|---------|
+| Amount | required, `4.50` or `12,30`, &gt; 0 | `4.50` |
+| What | words next to the amount | `coffee` |
+| Why | after ` - ` / ` — ` / ` \| ` / ` · ` or ` because ` | `late for train` |
+| Category | optional first token: `Food`, `#Travel`, `Rent`, `Fun`, `General` | `Food 10` |
+
+```text
+4.50 coffee late for train
+12,30 taxi - rain
+Food 10
+/add 8 cafe | meeting
+```
+
+Needs amount **and** What to hit the ledger. Bot runs only while `Dashboard.Api` is up (long polling, one allowed chat).
 
 ## Tests / CI
 
