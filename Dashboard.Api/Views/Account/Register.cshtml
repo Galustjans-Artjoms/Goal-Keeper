@@ -1,0 +1,57 @@
+@using Dashboard.Api.Auth
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/dashboard.css?v=neon1">
+</head>
+<body class="gate-body">
+<canvas id="particles"></canvas>
+<div class="drops" aria-hidden="true"><span></span><span></span><span></span></div>
+<main class="gate">
+    <section class="panel">
+        <h1>Register</h1>
+        @if (ViewData["Error"] is string error)
+        {
+            <p class="note bad">@error</p>
+        }
+        <form action="/register" method="post">
+            @Html.AntiForgeryToken()
+            <label>Username
+                <input name="username" value="@ViewData["Username"]" autocomplete="username" required>
+            </label>
+            <label>Password
+                <input name="password" type="password" autocomplete="new-password" required>
+            </label>
+            <label>Password again
+                <input name="confirmPassword" type="password" autocomplete="new-password" required>
+            </label>
+            <div class="puzzle" data-axis="y" data-piece-size="@CaptchaService.PieceHeight">
+                <p class="puzzle-hint">Slide the piece down into the gap</p>
+                <div class="puzzle-row">
+                    <div class="puzzle-board" style="width:@(CaptchaService.BoardWidth)px;height:@(CaptchaService.BoardHeight)px">
+                        <img src="/captcha/@ViewData["CaptchaId"]/board" alt="" width="@CaptchaService.BoardWidth" height="@CaptchaService.BoardHeight">
+                        <img class="puzzle-piece" src="/captcha/@ViewData["CaptchaId"]/piece" alt="" width="@CaptchaService.BoardWidth" height="@CaptchaService.PieceHeight">
+                    </div>
+                    <input class="puzzle-slider" type="range" min="0" max="@CaptchaService.SliderMax" value="0" aria-label="Piece position" style="height:@(CaptchaService.BoardHeight)px">
+                </div>
+                <input type="hidden" name="captchaId" value="@ViewData["CaptchaId"]">
+                <input type="hidden" name="captcha" value="0">
+            </div>
+            <button class="glass-btn" type="submit">Create account</button>
+        </form>
+        <p class="switch"><a href="/register">New picture</a> · Already have an account? <a href="/login">Sign in</a></p>
+    </section>
+</main>
+<script src="/js/particles.js"></script>
+<script src="/js/captcha.js"></script>
+</body>
+</html>

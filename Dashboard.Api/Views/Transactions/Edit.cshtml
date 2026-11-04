@@ -1,0 +1,48 @@
+@model Dashboard.Api.Controllers.EditTransaction
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/dashboard.css?v=neon1">
+</head>
+<body class="gate-body">
+<canvas id="particles"></canvas>
+<div class="drops" aria-hidden="true"><span></span><span></span><span></span></div>
+<main class="gate">
+    <section class="panel">
+        <h1>Edit</h1>
+        <form action="/transactions/@Model.Id/edit" method="post">
+            @Html.AntiForgeryToken()
+            <label>Amount
+                <input type="number" step="0.01" min="0.01" name="Amount" value="@Model.Amount?.ToString(System.Globalization.CultureInfo.InvariantCulture)" required>
+            </label>
+            <label>What
+                <input name="Description" value="@Model.Description" required>
+            </label>
+            <label>Why
+                <input name="Why" value="@Model.Why" required>
+            </label>
+            <label>Date
+                <input type="date" name="Date" value="@Model.Date?.ToString("yyyy-MM-dd")" required>
+            </label>
+            <label>Category
+                <input name="Category" value="@Model.Category" required>
+            </label>
+            <div class="actions">
+                <button class="glass-btn" type="submit">Save</button>
+                <a class="glass-btn button-link" href="/transactions">Back</a>
+            </div>
+        </form>
+    </section>
+</main>
+<script src="/js/particles.js"></script>
+</body>
+</html>

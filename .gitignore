@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+*.db
+*.db-shm
+*.db-wal
+.appsettings.*.local.json
+**/secrets.json
+.env
+.env.*
+!.env.example
+*.log
